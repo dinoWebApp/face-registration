@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>안면 등록 시스템 (EJS)</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+        min-height: 100vh;
+        margin: 0;
+        background-color: #f0f2f5;
+        color: #333;
+        padding: 20px;
+        box-sizing: border-box;
+      }
+      #container {
+        position: relative;
+        width: 100%;
+        max-width: 640px;
+        aspect-ratio: 4 / 3;
+        background-color: #000;
+        border-radius: 8px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        overflow: hidden;
+      }
+      video,
+      canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scaleX(-1);
+      }
+      #statusMessage {
+        margin-top: 20px;
+        padding: 10px 15px;
+        border-radius: 5px;
+        font-size: 1.1em;
+        color: #fff;
+        min-width: 280px;
+        max-width: 100%;
+        text-align: center;
+        word-break: keep-all;
+      }
+      .info {
+        background-color: #2196f3;
+      }
+      .success {
+        background-color: #4caf50;
+      }
+      .failure {
+        background-color: #f44336;
+      }
+      button {
+        margin-top: 20px;
+        padding: 12px 25px;
+        font-size: 1.1em;
+        background-color: #007bff;
+        color: white;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+        width: 100%;
+        max-width: 300px;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+      button:disabled {
+        background-color: #cccccc;
+        cursor: not-allowed;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>안면 등록 시스템</h1>
+    <div id="container">
+      <video id="videoInput" autoplay muted></video>
+      <canvas id="overlayCanvas"></canvas>
+    </div>
+    <div id="statusMessage" class="info">모델 로딩 중...</div>
+    <button id="registerFaceButton" disabled>얼굴 등록</button>
+
+    <script src="/js/face-api.min.js"></script>
+    <script>
+      const video = document.getElementById('videoInput');
+      const canvas = document.getElementById('overlayCanvas');
+      const statusMessage = document.getElementById('statusMessage');
+      const registerFaceButton = document.getElementById('registerFaceButton');
+      registerFaceButton.disabled = true; // 초기 비활성화
+
+      let displaySize;
+      let labeledFaceDescriptors = [];
+      const AUTH_THRESHOLD = 0.6;
+      const DETECTION_THRESHOLD = 0.7;
+      const MIN_FACE_SIZE_RATIO = 0.2;
+      const MAX_FACE_SIZE_RATIO = 0.8;
+      const FACE_CENTER_TOLERANCE = 0.2;
+
+      function updateStatus(message, type = 'info') {
+        statusMessage.textContent = message;
+        statusMessage.className = `info ${type}`;
+        console.log(`[App] Status: ${message}`);
+      }
+
+      async function loadModels() {
+        updateStatus('AI 모델 로딩 중...');
+        try {
+          const MODEL_URL = '/models';
+          await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+          await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+          await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+          console.log('[App] Face-API 모델 로드 성공.');
+          updateStatus('모델 로드 완료. 카메라 시작 중...', 'success');
+          registerFaceButton.disabled = false;
+        } catch (err) {
+          console.error('[App] Face-API 모델 로드 실패:', err);
+          updateStatus(
+            '오류: 모델 로드 실패! "models" 폴더를 확인하세요.',
+            'failure',
+          );
+          alert(
+            '모델 로드에 실패했습니다. 서버의 /models 폴더 위치를 확인하세요.',
+          );
+        }
+      }
+
+      async function loadRegisteredFaces() {
+        updateStatus('등록된 얼굴 데이터 로드 중...');
+        try {
+          labeledFaceDescriptors = [];
+          console.log(
+            `[App] ${labeledFaceDescriptors.length}개의 등록된 얼굴 데이터 로드 완료.`,
+          );
+          updateStatus('등록된 얼굴 데이터 로드 완료.');
+        } catch (err) {
+          console.error('[App] 등록된 얼굴 데이터 로드 실패:', err);
+          updateStatus('오류: 등록된 얼굴 데이터 로드 실패!', 'failure');
+        }
+      }
+
+      async function startVideoStream() {
+        updateStatus('비디오 스트림 시작 중...');
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 30 },
+            },
+          });
+          video.srcObject = stream;
+          video.onloadedmetadata = () => {
+            video.play();
+            displaySize = {
+              width: video.videoWidth,
+              height: video.videoHeight,
+            };
+            faceapi.matchDimensions(canvas, displaySize);
+            updateStatus('카메라 활성화됨. 얼굴 감지 중...');
+            startFaceDetectionLoop();
+          };
+        } catch (err) {
+          console.error('[App] 웹캠 접근 오류:', err);
+          updateStatus('오류: 웹캠 접근 실패. 카메라를 확인하세요.', 'failure');
+        }
+      }
+
+      async function startFaceDetectionLoop() {
+        setInterval(async () => {
+          if (!video.srcObject) return;
+
+          const detection = await faceapi
+            .detectSingleFace(
+              video,
+              new faceapi.TinyFaceDetectorOptions({
+                inputSize: 320,
+                scoreThreshold: 0.5,
+              }),
+            )
+            .withFaceLandmarks();
+
+          canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+
+          if (detection) {
+            const resized = faceapi.resizeResults(detection, displaySize);
+            faceapi.draw.drawDetections(canvas, resized);
+            faceapi.draw.drawFaceLandmarks(canvas, resized);
+            updateStatus('얼굴이 감지되었습니다. 등록 준비 완료.', 'info');
+
+            // ✅ 감지되면 버튼 활성화
+            registerFaceButton.disabled = false;
+          } else {
+            updateStatus(
+              '얼굴이 감지되지 않았습니다. 카메라를 봐주세요.',
+              'info',
+            );
+
+            // ✅ 감지되지 않으면 버튼 비활성화
+            registerFaceButton.disabled = true;
+          }
+        }, 300);
+      }
+
+      async function registerFace() {
+        updateStatus('얼굴 등록을 시도합니다...', 'info');
+        registerFaceButton.disabled = true;
+
+        const detections = await faceapi
+          .detectAllFaces(
+            video,
+            new faceapi.TinyFaceDetectorOptions({
+              inputSize: 320,
+              scoreThreshold: DETECTION_THRESHOLD,
+            }),
+          )
+          .withFaceLandmarks()
+          .withFaceDescriptors();
+
+        if (!detections || detections.length === 0) {
+          updateStatus('⚠️ 얼굴이 감지되지 않았습니다.', 'failure');
+          alert('다시 시도해주세요.');
+          registerFaceButton.disabled = false;
+          return;
+        }
+
+        if (detections.length > 1) {
+          updateStatus('⚠️ 여러 얼굴이 감지되었습니다.', 'failure');
+          alert('한 사람만 비춰주세요.');
+          registerFaceButton.disabled = false;
+          return;
+        }
+
+        const detection = detections[0];
+        const faceBox = detection.detection.box;
+        const canvasWidth = canvas.width;
+        const canvasHeight = canvas.height;
+        const faceWidthRatio = faceBox.width / canvasWidth;
+        const faceHeightRatio = faceBox.height / canvasHeight;
+
+        if (
+          faceWidthRatio < MIN_FACE_SIZE_RATIO ||
+          faceHeightRatio < MIN_FACE_SIZE_RATIO
+        ) {
+          updateStatus('⚠️ 얼굴이 너무 작습니다.', 'failure');
+          alert('카메라에 가까이 다가가세요.');
+          registerFaceButton.disabled = false;
+          return;
+        }
+
+        if (
+          faceWidthRatio > MAX_FACE_SIZE_RATIO ||
+          faceHeightRatio > MAX_FACE_SIZE_RATIO
+        ) {
+          updateStatus('⚠️ 얼굴이 너무 큽니다.', 'failure');
+          alert('카메라에서 약간 멀어지세요.');
+          registerFaceButton.disabled = false;
+          return;
+        }
+
+        const faceCenterX = faceBox.x + faceBox.width / 2;
+        const faceCenterY = faceBox.y + faceBox.height / 2;
+        const canvasCenterX = canvasWidth / 2;
+        const canvasCenterY = canvasHeight / 2;
+        const deltaX = Math.abs(faceCenterX - canvasCenterX);
+        const deltaY = Math.abs(faceCenterY - canvasCenterY);
+
+        if (
+          deltaX > canvasWidth * FACE_CENTER_TOLERANCE ||
+          deltaY > canvasHeight * FACE_CENTER_TOLERANCE
+        ) {
+          updateStatus('⚠️ 얼굴이 중앙에 위치하지 않았습니다.', 'failure');
+          alert('얼굴을 중앙에 맞춰주세요.');
+          registerFaceButton.disabled = false;
+          return;
+        }
+
+        const descriptor = detection.descriptor;
+        const userName = prompt('등록할 이름을 입력하세요:', '새 사용자');
+
+        if (!userName) {
+          updateStatus('등록 취소됨: 이름이 필요합니다.', 'info');
+          registerFaceButton.disabled = false;
+          return;
+        }
+
+        updateStatus(`'${userName}' 등록 중...`, 'info');
+
+        try {
+          const descriptorArray = Array.from(descriptor);
+
+          const response = await fetch('/registration', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: userName,
+              descriptor: descriptorArray,
+            }),
+          });
+
+          if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.message || '서버 오류');
+          }
+
+          const result = await response.json();
+          console.log('[App] 등록 성공:', result);
+          updateStatus(`'${userName}' 등록 성공!`, 'success');
+        } catch (error) {
+          console.error('[App] 등록 실패:', error);
+          updateStatus(`등록 실패: ${error.message}`, 'failure');
+          alert(`서버 오류: ${error.message}`);
+        } finally {
+          registerFaceButton.disabled = false;
+        }
+      }
+
+      async function init() {
+        await loadModels();
+        await loadRegisteredFaces();
+        await startVideoStream();
+        registerFaceButton.addEventListener('click', registerFace);
+      }
+
+      init();
+    </script>
+  </body>
+</html>

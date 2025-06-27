@@ -1,0 +1,4 @@
+export enum PRISMA_ERR_CODE {
+  DUPLICATE = 'P2002',
+  NOT_FOUND = 'P2025',
+}
