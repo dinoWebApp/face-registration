@@ -1,6 +1,5 @@
 import { IRepository } from 'src/common/interfaces/repository.interface';
 import { FaceEntity } from '../entities/face.entity';
-import { Prisma } from 'generated/prisma';
 import { PrismaClientType } from 'src/common/types/prisma';
 import { PrismaService } from 'src/modules/prisma/prisma.service';
 import {
@@ -10,15 +9,16 @@ import {
 } from '@nestjs/common';
 import { PRISMA_ERR_CODE } from 'src/common/enums/prisma-error-code.enum';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class FaceRepository
   implements
-    IRepository<FaceEntity, Prisma.faceCreateInput, Prisma.faceUpdateInput>
+    IRepository<FaceEntity, Prisma.FaceCreateInput, Prisma.FaceUpdateInput>
 {
   constructor(private readonly prismaService: PrismaService) {}
   async create(
-    data: Prisma.faceCreateInput,
+    data: Prisma.FaceCreateInput,
     prisma?: PrismaClientType,
   ): Promise<FaceEntity> {
     const client = prisma || this.prismaService;
@@ -34,7 +34,7 @@ export class FaceRepository
   }
   update(
     id: number,
-    data: Prisma.faceUpdateInput,
+    data: Prisma.FaceUpdateInput,
     prisma?: PrismaClientType,
   ): Promise<FaceEntity> {
     throw new Error('Method not implemented.');

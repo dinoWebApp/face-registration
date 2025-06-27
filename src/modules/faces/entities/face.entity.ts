@@ -1,4 +1,4 @@
-import { face as PrismaFace } from 'generated/prisma';
+import { Face as PrismaFace } from '@prisma/client';
 
 export class FaceEntity implements PrismaFace {
   name: string;
