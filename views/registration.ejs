@@ -140,7 +140,12 @@
       async function startCamera() {
         try {
           const stream = await navigator.mediaDevices.getUserMedia({
-            video: true,
+            video: {
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+              frameRate: { ideal: 30 },
+              facingMode: 'user', // ✅ 아이폰 호환을 위한 필수 설정
+            },
           });
           video.srcObject = stream;
           video.onloadedmetadata = () => {
