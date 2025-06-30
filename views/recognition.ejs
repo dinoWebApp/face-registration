@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 모바일 기기에서 올바른 화면 크기를 인식하도록 뷰포트 설정 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>얼굴 인식</title>
+    <style>
+      /* 화면 스타일: 비디오가 전체 화면을 채우도록 설정 */
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: black;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      /* 비디오 화면을 캔버스 뒤에 배치하고 좌우 반전(거울 모드) */
+      video {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        object-fit: cover;
+        z-index: 0;
+        transform: scaleX(-1); /* 👈 좌우 반전 */
+      }
+
+      /* 상태 메시지 박스 스타일 */
+      #status {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: white;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 12px 20px;
+        border-radius: 10px;
+        font-family: sans-serif;
+        font-size: 1.2em;
+        z-index: 10;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      /* ‼️ 반응형 스타일: 화면 너비가 600px 이하인 경우 적용 */
+      @media (max-width: 600px) {
+        #status {
+          width: 90%; /* 너비를 90%로 설정하여 긴 메시지도 잘 보이게 함 */
+          white-space: normal; /* 긴 메시지가 자동으로 줄바꿈 되도록 함 */
+          font-size: 1em; /* 글자 크기를 약간 줄임 */
+          padding: 10px 15px; /* 여백을 약간 줄임 */
+          bottom: 15px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 웹캠 영상을 보여줄 비디오 요소 -->
+    <video id="video" autoplay muted playsinline></video>
+
+    <!-- 현재 상태를 알려줄 메시지 박스 -->
+    <div id="status">모델을 불러오는 중...</div>
+
+    <!-- face-api.js 라이브러리 로드 -->
+    <script src="/js/face-api.min.js"></script>
+
+    <!-- 얼굴 인식 로직 스크립트 (JavaScript 코드는 변경 없음) -->
+    <script>
+      const video = document.getElementById('video');
+      const statusBox = document.getElementById('status');
+
+      const MODEL_URL = '/models';
+
+      let faceMatcher = null;
+
+      Promise.all([
+        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+      ]).then(startVideo);
+
+      function startVideo() {
+        navigator.mediaDevices
+          .getUserMedia({ video: {} })
+          .then((stream) => {
+            video.srcObject = stream;
+            statusBox.textContent =
+              '카메라 준비 완료. 얼굴 데이터를 불러오는 중...';
+            loadFaceData();
+            setInterval(loadFaceData, 5000);
+          })
+          .catch((err) => {
+            console.error('카메라 에러:', err);
+            statusBox.textContent = '카메라 접근에 실패했습니다: ' + err;
+          });
+      }
+
+      async function loadFaceData() {
+        try {
+          const res = await fetch('https://www.dabuffet.co.kr/faces');
+          const data = await res.json();
+
+          if (data.length === 0) {
+            statusBox.textContent = '등록된 얼굴 데이터가 없습니다.';
+            return;
+          }
+
+          const labeledDescriptors = data.map((entry) => {
+            const descriptor = new Float32Array(
+              Object.values(entry.descriptor),
+            );
+            return new faceapi.LabeledFaceDescriptors(entry.name, [descriptor]);
+          });
+
+          faceMatcher = new faceapi.FaceMatcher(labeledDescriptors, 0.45);
+          statusBox.textContent = '얼굴 데이터 로딩 완료. 인식을 시작합니다.';
+          console.log('얼굴 데이터 로딩 및 갱신 완료');
+        } catch (err) {
+          console.error('얼굴 데이터 불러오기 실패:', err);
+          statusBox.textContent = '얼굴 데이터를 불러오는 데 실패했습니다.';
+        }
+      }
+
+      video.addEventListener('play', () => {
+        setInterval(async () => {
+          if (!faceMatcher) {
+            statusBox.textContent = '얼굴 데이터를 기다리는 중...';
+            return;
+          }
+
+          const detection = await faceapi
+            .detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+            .withFaceLandmarks()
+            .withFaceDescriptor();
+
+          if (!detection) {
+            statusBox.textContent = '얼굴이 감지되지 않습니다.';
+            return;
+          }
+
+          const area =
+            detection.detection.box.width * detection.detection.box.height;
+
+          if (area < 5000) {
+            statusBox.textContent = '조금 더 가까이 와주세요.';
+            return;
+          } else if (area > 100000) {
+            statusBox.textContent = '조금 뒤로 물러나 주세요.';
+            return;
+          }
+
+          const bestMatch = faceMatcher.findBestMatch(detection.descriptor);
+
+          statusBox.textContent =
+            bestMatch.label === 'unknown'
+              ? '등록되지 않은 사용자입니다.'
+              : `${bestMatch.label}님이 감지되었습니다.`;
+        }, 1000);
+      });
+    </script>
+  </body>
+</html>

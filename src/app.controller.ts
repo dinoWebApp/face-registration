@@ -14,6 +14,10 @@ export class AppController {
   @Render('registration')
   index() {}
 
+  @Get('recognition')
+  @Render('recognition')
+  recognition() {}
+
   @Post('registration')
   @HttpCode(200)
   async registerFace(@Body() registerFaceDto: RegisterFaceDto) {
